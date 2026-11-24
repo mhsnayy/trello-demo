@@ -9,3 +9,21 @@ Laravel + SQLite ile basit bir pano demosu.
 - Kurallar: `config/automations.php`, çalıştıran kod: `app/Services/AutomationEngine.php`
 
 Giriş ekranı yoktur, kullanıcı sağ üstten seçilir. Bu haliyle internete açmayın.
+
+## Docker
+
+```sh
+docker compose up -d --build      # http://localhost:8080
+docker compose logs -f            # günlükler
+docker compose down               # durdur (veri kalır; `down -v` veriyi SİLER)
+```
+
+Veri SQLite olarak `data` hacminde (`/data/database.sqlite`) durur. İlk açılışta örnek veri eklenir.
+Varsayılan olarak yalnızca bu bilgisayardan erişilir; port için `APP_PORT`, adres için `BIND_ADDRESS` ortam değişkeni.
+
+Yedek alma:
+
+```sh
+docker compose exec app php -r '@unlink("/data/yedek.sqlite"); (new PDO("sqlite:/data/database.sqlite"))->exec("VACUUM INTO \"/data/yedek.sqlite\"");'
+docker compose cp app:/data/yedek.sqlite ./yedek.sqlite
+```
