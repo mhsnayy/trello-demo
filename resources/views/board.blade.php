@@ -17,7 +17,11 @@
         </nav>
         <button id="automations-button" class="ghost">⚡ Otomasyonlar</button>
         <button id="history-button" class="ghost">🕘 Geçmiş</button>
-        <label id="user-switch">Kullanıcı: <select id="user-select"></select></label>
+        <div id="account">
+            <span>{{ auth()->user()->name }}</span>
+            <a href="/password">Şifre değiştir</a>
+            <form method="post" action="/logout">@csrf<button class="ghost">Çıkış</button></form>
+        </div>
     </header>
     <main id="board"></main>
     <dialog id="card-dialog"></dialog>

@@ -27,8 +27,16 @@ header nav a[aria-current] { background: #fff; color: #1b4a4d; font-weight: 600;
 button:disabled { cursor: not-allowed; opacity: .55; }
 .empty { color: #fff; margin: 20px auto; }
 @media (max-width: 720px) { header { flex-wrap: wrap; } }
-#user-switch { margin-left: auto; display: flex; align-items: center; gap: 8px; }
-#user-select { width: auto; color: #1d2b36; }
+#account { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+#account a { color: #fff; }
+#account form { margin: 0; }
+
+.auth { align-items: center; justify-content: center; gap: 12px; padding: 16px; }
+.auth form:not(.plain) { width: min(360px, 100%); background: #fff; border-radius: 12px; padding: 24px; display: flex; flex-direction: column; gap: 14px; }
+.auth h1 { margin: 0; font-size: 20px; }
+.auth p { margin: 0; }
+.auth a { text-align: center; color: #1f6468; }
+.error { background: #fbdedb; color: #8f241b; padding: 8px 10px; border-radius: 6px; }
 
 #board { flex: 1; display: flex; gap: 12px; align-items: flex-start; overflow-x: auto; padding: 14px; min-height: 0; }
 .lists { display: flex; gap: 12px; align-items: flex-start; height: 100%; }

@@ -12,6 +12,6 @@ class User extends Authenticatable
 
     protected function casts(): array
     {
-        return ['password' => 'hashed', 'is_admin' => 'boolean'];
+        return ['password' => 'hashed', 'is_admin' => 'boolean', 'must_change_password' => 'boolean'];
     }
 }

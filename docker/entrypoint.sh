@@ -14,12 +14,12 @@ if [ -z "$APP_KEY" ]; then
     export APP_KEY
 fi
 
-# Örnek veri yalnızca veritabanı ilk kez oluşturulurken eklenir.
+# Kullanıcılar ve ana listeler yalnızca veritabanı ilk kez oluşturulurken eklenir.
 if [ ! -f "$DB_DATABASE" ]; then
     as_app touch "$DB_DATABASE"
     as_app php artisan migrate --force --seed || { rm -f "$DB_DATABASE"*; exit 1; }
 else
-    chown www-data:www-data "$DB_DATABASE"
+    chown www-data:www-data "$DB_DATABASE"*
     as_app php artisan migrate --force
 fi
 

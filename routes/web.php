@@ -1,14 +1,25 @@
 <?php
 
+use App\Http\Controllers\AuthController;
 use App\Http\Controllers\BoardController;
-use App\Http\Middleware\UseMockUser;
+use App\Http\Middleware\RequirePasswordChange;
 use Illuminate\Support\Facades\Route;
 
-Route::middleware(UseMockUser::class)->controller(BoardController::class)->group(function () {
+Route::controller(AuthController::class)->group(function () {
+    Route::get('/login', 'showLogin')->middleware('guest')->name('login');
+    Route::post('/login', 'login')->middleware('guest');
+
+    Route::middleware(['auth', 'auth.session'])->group(function () {
+        Route::post('/logout', 'logout');
+        Route::get('/password', 'showPassword')->name('password');
+        Route::post('/password', 'updatePassword')->middleware('throttle:10,1');
+    });
+});
+
+Route::middleware(['auth', 'auth.session', RequirePasswordChange::class])->controller(BoardController::class)->group(function () {
     Route::get('/', 'index');
     Route::get('/board', 'data');
     Route::get('/history', 'history');
-    Route::post('/switch-user/{user}', 'switchUser');
 
     Route::post('/lists', 'storeList');
     Route::put('/lists/{list}', 'updateList');

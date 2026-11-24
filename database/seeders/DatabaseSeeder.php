@@ -5,24 +5,21 @@ namespace Database\Seeders;
 use App\Models\BoardList;
 use App\Models\User;
 use Illuminate\Database\Seeder;
-use Illuminate\Support\Str;
 
 class DatabaseSeeder extends Seeder
 {
     public function run(): void
     {
-        $users = collect([
-            ['Yönetici', 'yonetici', '#0c66e4', true],
-            ['Ayşe Yılmaz', 'ayse', '#ae2e24', false],
-            ['Mehmet Kaya', 'mehmet', '#216e4e', false],
-            ['Zeynep Demir', 'zeynep', '#5e4db2', false],
-        ])->map(fn ($u) => User::create([
-            'name' => $u[0], 'email' => $u[1].'@example.com', 'password' => Str::random(40),
-            'color' => $u[2], 'is_admin' => $u[3],
-        ]));
+        $this->call(UserSeeder::class);
+        $users = User::orderBy('id')->get();
 
         $lists = collect(['Yapılacaklar', 'Yapılıyor', 'Yapıldı', 'Tamamlandı'])
             ->map(fn ($name, $i) => BoardList::create(['name' => $name, 'position' => $i]));
+
+        // Örnek kartlar yalnızca geliştirme ortamında eklenir.
+        if (app()->isProduction()) {
+            return;
+        }
 
         $cards = [
             [0, 'Müşteri toplantısını planla', [1], []],

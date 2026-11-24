@@ -65,6 +65,9 @@ return [
     |
     */
 
+    // Seed ile oluşturulan kullanıcıların ilk şifresi; ilk girişte değiştirilir.
+    'seed_user_password' => env('SEED_USER_PASSWORD'),
+
     'timezone' => 'Europe/Istanbul',
 
     /*

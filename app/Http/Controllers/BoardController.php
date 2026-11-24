@@ -36,13 +36,6 @@ class BoardController extends Controller
         return $this->board();
     }
 
-    public function switchUser(User $user)
-    {
-        Auth::login($user);
-
-        return response()->noContent();
-    }
-
     // --- Listeler ---
 
     public function storeList(Request $request)

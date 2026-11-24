@@ -21,6 +21,16 @@ class AutomationTest extends TestCase
         parent::setUp();
         $this->seed();
         $this->travelTo('2026-11-24 12:00:00');
+        User::query()->update(['must_change_password' => false]);
+        $this->actingAs(User::where('is_admin', true)->first());
+    }
+
+    /** auth.session, oturumdaki şifre özetini denetlediği için kullanıcı değişince oturum temizlenir. */
+    public function actingAs($user, $guard = null)
+    {
+        $this->flushSession();
+
+        return parent::actingAs($user, $guard);
     }
 
     private function card(string $list, array $items = []): Card

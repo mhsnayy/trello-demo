@@ -22,6 +22,7 @@ RUN chmod +x /usr/local/bin/app-entrypoint \
 ENV APP_NAME="Mini Pano" \
     APP_ENV=production \
     APP_DEBUG=false \
+    SESSION_LIFETIME=480 \
     LOG_CHANNEL=stderr \
     DB_CONNECTION=sqlite \
     DB_DATABASE=/data/database.sqlite \

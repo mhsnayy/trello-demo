@@ -46,12 +46,11 @@ async function request(method, url, body) {
         },
         body: body ? JSON.stringify(body) : undefined,
     });
-    if (response.status === 419) {
-        // Oturum başka sekmede değişmiş.
+    if (response.status === 401 || response.status === 419) {
+        // Oturum kapanmış; yenileyince giriş ekranı gelir.
         location.reload();
         throw new Error('Oturum yenileniyor…');
     }
-    if (response.status === 204) return null;
     const data = await response.json();
     if (!response.ok) throw new Error(response.status === 404 ? 'Kayıt bulunamadı, silinmiş olabilir.' : data.message);
     return data;
@@ -133,7 +132,6 @@ function render(keepDialog = false) {
     const dialogScroll = cardDialog.scrollTop;
 
     document.body.append($('#toast'));
-    renderUsers();
     renderBoard();
     if (!keepDialog) renderCardDialog();
     if (rulesDialog.open) renderRules();
@@ -148,12 +146,6 @@ function render(keepDialog = false) {
     }
     cardDialog.scrollTop = dialogScroll;
     if (active) document.querySelector(`[data-draft="${active}"]`)?.focus();
-}
-
-function renderUsers() {
-    const select = $('#user-select');
-    select.replaceChildren(...state.users.map((u) => h('option', { value: u.id }, u.name)));
-    select.value = state.me;
 }
 
 function renderBoard() {
@@ -392,14 +384,6 @@ function renderRules() {
 
 $('#automations-button').onclick = () => { renderRules(); rulesDialog.showModal(); };
 $('#history-button').onclick = () => openHistory('/history');
-$('#user-select').onchange = async (e) => {
-    try {
-        await request('POST', `/switch-user/${e.target.value}`);
-        location.reload();
-    } catch (error) {
-        toast(error.message);
-    }
-};
 for (const dialog of [cardDialog, rulesDialog, historyDialog]) {
     dialog.addEventListener('mousedown', (e) => {
         if (e.target !== dialog) return;

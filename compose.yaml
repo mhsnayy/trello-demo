@@ -5,10 +5,12 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      # Giriş ekranı olmadığı için varsayılan olarak yalnızca bu bilgisayardan erişilir.
-      - "${BIND_ADDRESS:-127.0.0.1}:${APP_PORT:-8080}:80"
+      # Yerel ağa açıktır. Yalnızca bu bilgisayar için BIND_ADDRESS=127.0.0.1 verin.
+      - "${BIND_ADDRESS:-0.0.0.0}:${APP_PORT:-3000}:80"
     environment:
-      APP_URL: ${DOCKER_APP_URL:-http://localhost:8080}
+      # Yalnızca kullanıcılar ilk oluşturulurken kullanılır (.env dosyasından gelir).
+      SEED_USER_PASSWORD: ${SEED_USER_PASSWORD:-}
+      APP_URL: ${DOCKER_APP_URL:-http://localhost:3000}
     volumes:
       - data:/data
 
