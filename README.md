@@ -23,6 +23,9 @@ docker compose exec -u www-data app php artisan db:seed --class=UserSeeder --for
 docker compose exec -u www-data app php artisan user:reset-password ad.soyad@ardic.com
 ```
 
+Kart yetkileri: yönetici her şeyi görür. Üye kartı görür ve düzenler, izleyici yalnızca görür, diğerleri kartı hiç görmez.
+Üye ve izleyiciler kart penceresinden atanır; kartı açan kişi kendiliğinden üye olur.
+
 HTTPS olmadan internete açmayın.
 
 ## Docker

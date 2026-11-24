@@ -18,7 +18,8 @@ class AutomationEngine
 
         foreach (config('automations') as $rule) {
             $matches = ($rule['list'] === null || $rule['list'] === $listName)
-                && $rule['checklist'] === $state
+                && ($rule['except'] ?? null) !== $listName
+                && ($rule['checklist'] === $state || ($rule['checklist'] === 'any' && $state !== 'none'))
                 && ($rule['by'] === 'anyone' || $actor->is_admin);
 
             if ($matches) {
@@ -48,7 +49,7 @@ class AutomationEngine
         $message = "“{$card->title}”: ".implode(', ', $done);
 
         Activity::record($card, "⚡ Kural {$rule['id']}: ".implode(', ', $done));
-        AutomationLog::create(['rule_id' => $rule['id'], 'user_id' => $actor->id, 'message' => $message]);
+        AutomationLog::create(['rule_id' => $rule['id'], 'card_id' => $card->id, 'user_id' => $actor->id, 'message' => $message]);
 
         return $message;
     }

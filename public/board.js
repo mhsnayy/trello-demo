@@ -111,8 +111,8 @@ function completeBox(card) {
     return h('input', {
         type: 'checkbox',
         checked: card.completed,
-        disabled: locked,
-        title: locked ? 'Sadece yönetici onaylayabilir' : 'Tamamlandı olarak işaretle',
+        disabled: locked || !card.can_edit,
+        title: !card.can_edit ? 'İzleyicisiniz, değiştiremezsiniz' : locked ? 'Sadece yönetici onaylayabilir' : 'Tamamlandı olarak işaretle',
         'aria-label': `Tamamlandı: ${card.title}`,
         onclick: (event) => event.stopPropagation(),
         onchange: (event) => {
@@ -188,7 +188,8 @@ function renderBoard() {
     lists.querySelectorAll('.cards').forEach((el) => {
         const locked = isLocked(state.lists.find((l) => l.id === Number(el.dataset.id)));
         Sortable.create(el, {
-            ...drag, group: { name: 'cards', pull: !locked, put: true }, sort: !locked,
+            ...drag, filter: '.readonly', preventOnFilter: false,
+            group: { name: 'cards', pull: !locked, put: true }, sort: !locked,
             onEnd: (e) => {
                 dragging = false;
                 if (e.from === e.to && e.oldIndex === e.newIndex) return;
@@ -211,8 +212,8 @@ function renderArchive() {
         h('div', {}, h('strong', {}, card.title), h('div', { class: 'muted' }, `${card.list} · ${card.at}`)),
         h('button', { onclick: () => openHistory(`/cards/${card.id}/history`, card.title) }, 'Geçmiş'),
         h('button', {
-            class: 'primary', disabled: card.admin_only && !isAdmin(),
-            title: card.admin_only && !isAdmin() ? 'Sadece yönetici geri alabilir' : null,
+            class: 'primary', disabled: !card.can_restore,
+            title: card.can_restore ? null : 'Bu kartı geri alma yetkiniz yok',
             onclick: () => mutate('POST', `/cards/${card.id}/restore`),
         }, 'Geri al'))));
 }
@@ -241,7 +242,7 @@ function renderList(list) {
                 const name = prompt('Liste adı', list.name)?.trim();
                 if (name && name !== list.name) mutate('PUT', `/lists/${list.id}`, { name });
             } }, '✎'),
-            !list.protected && !isLocked(list) && h('button', { class: 'icon', title: 'Listeyi sil', onclick: () => {
+            !list.protected && isAdmin() && h('button', { class: 'icon', title: 'Listeyi sil', onclick: () => {
                 if (confirm(`“${list.name}” silinsin mi? İçindeki ${list.cards.length} kart arşive taşınır.`)) mutate('DELETE', `/lists/${list.id}`);
             } }, '✕')),
         h('div', { class: 'cards', 'data-id': list.id, 'data-scroll': `list-${list.id}` }, list.cards.map(renderCard)),
@@ -253,12 +254,13 @@ function renderCard(card) {
     const checked = all.filter((i) => i.checked).length;
     const today = new Date().toLocaleDateString('sv-SE');
     return h('article', {
-        class: card.completed ? 'card done' : 'card', 'data-id': card.id, tabindex: 0,
+        class: ['card', card.completed && 'done', !card.can_edit && 'readonly'].filter(Boolean).join(' '), 'data-id': card.id, tabindex: 0,
         onclick: () => openCard(card.id),
         onkeydown: (e) => { if (e.key === 'Enter' && e.target === e.currentTarget) openCard(card.id); },
     },
         h('div', { class: 'card-top' }, completeBox(card), h('span', {}, card.title)),
         h('div', { class: 'badges' },
+            !card.can_edit && h('span', { title: 'Bu kartın izleyicisisiniz' }, '👁 İzleyici'),
             card.due_date && h('span', { class: card.due_date < today && !card.completed ? 'badge late' : 'badge' }, `📅 ${card.due_date.split('-').reverse().join('.')}`),
             card.description && h('span', { title: 'Açıklama var' }, '☰'),
             card.comments.length > 0 && h('span', {}, `💬 ${card.comments.length}`),
@@ -283,7 +285,16 @@ function renderCardDialog() {
         return;
     }
     const list = state.lists.find((l) => l.id === card.list_id);
-    const readOnly = list.is_date && !isAdmin();
+    const readOnly = !card.can_edit || (list.is_date && !isAdmin());
+    const note = !card.can_edit ? ' · İzleyicisiniz, değiştiremezsiniz' : readOnly ? ' · Onaylandı, sadece yönetici düzenleyebilir' : '';
+    const roleButtons = (role, ids, users) => h('div', { class: 'row' }, users.map((u) => h('button', {
+        class: 'member-toggle', disabled: readOnly, 'aria-pressed': String(ids.includes(u.id)),
+        onclick: () => {
+            const next = ids.includes(u.id) ? null : role;
+            if (u.id === state.me && !isAdmin() && next !== 'member' && !confirm(next ? 'İzleyici olursanız kartı değiştiremezsiniz. Devam edilsin mi?' : 'Kendinizi çıkarırsanız bu kartı göremezsiniz. Devam edilsin mi?')) return;
+            mutate('PUT', `/cards/${card.id}/people/${u.id}`, { role: next });
+        },
+    }, avatar(u), u.name)));
     // Alan kaydında pencere yeniden çizilmez; böylece o anda basılan buton kaybolmaz.
     const save = (field) => (e) => {
         if (field === 'title' && !e.target.value.trim()) {
@@ -298,15 +309,14 @@ function renderCardDialog() {
             completeBox(card),
             h('input', { value: card.title, disabled: readOnly, maxlength: 255, 'aria-label': 'Başlık', onchange: save('title') }),
             h('button', { class: 'icon', 'aria-label': 'Kapat', onclick: () => cardDialog.close() }, '✕')),
-        h('div', { class: 'muted' }, readOnly ? `Liste: ${list.name} · Onaylandı, sadece yönetici düzenleyebilir` : `Liste: ${list.name}`),
+        h('div', { class: 'muted' }, `Liste: ${list.name}${note}`),
 
         h('div', { class: 'card-columns' },
             h('div', { class: 'card-main', 'data-scroll': 'card-main' },
-                h('h3', {}, 'Üyeler'),
-                h('div', { class: 'row' }, state.users.map((u) => h('button', {
-                    class: 'member-toggle', disabled: readOnly, 'aria-pressed': String(card.members.includes(u.id)),
-                    onclick: () => mutate('POST', `/cards/${card.id}/members/${u.id}`),
-                }, avatar(u), u.name))),
+                h('h3', {}, 'Üyeler (görür ve düzenler)'),
+                roleButtons('member', card.members, state.users),
+                h('h3', {}, 'İzleyiciler (yalnızca görür)'),
+                roleButtons('viewer', card.viewers, state.users.filter((u) => !u.is_admin || card.viewers.includes(u.id))),
 
                 h('h3', {}, 'Bitiş tarihi'),
                 h('input', { type: 'date', disabled: readOnly, value: card.due_date ?? '', 'aria-label': 'Bitiş tarihi', style: 'width:auto', onchange: save('due_date') }),
@@ -322,14 +332,14 @@ function renderCardDialog() {
                     const target = state.lists.find((l) => l.name === 'Tamamlandı');
                     mutate('POST', `/cards/${card.id}/move`, { list_id: target.id, index: 0 });
                 } }, '↩ Tamamlandı listesine geri al')),
-                !isLocked(list) && h('div', { style: 'margin-top:20px' }, h('button', { class: 'danger', onclick: () => {
+                card.can_edit && !isLocked(list) && h('div', { style: 'margin-top:20px' }, h('button', { class: 'danger', onclick: () => {
                     mutate('DELETE', `/cards/${card.id}`);
                 } }, 'Arşivle'))),
 
             h('aside', { class: 'card-comments', 'data-scroll': 'card-comments' },
                 h('div', { class: 'checklist-head' }, h('h3', {}, 'Yorumlar'),
                 h('button', { class: 'icon', onclick: () => openHistory(`/cards/${card.id}/history`, card.title) }, '🕘 Geçmiş')),
-                addForm(`comment-${card.id}`, 'Yorum yaz', 'Gönder', (body) => mutate('POST', `/cards/${card.id}/comments`, { body })),
+                card.can_edit && addForm(`comment-${card.id}`, 'Yorum yaz', 'Gönder', (body) => mutate('POST', `/cards/${card.id}/comments`, { body })),
                 card.comments.map((c) => {
                     const author = user(c.user_id) ?? { name: '⚡ Otomasyon', color: '#5b6b75' };
                     return h('div', { class: 'comment' }, avatar(author),
@@ -358,9 +368,9 @@ function renderChecklist(checklist, readOnly) {
 // --- Otomasyon penceresi ---
 
 function ruleText(rule) {
-    const where = rule.list ? `“${rule.list}” listesindeki` : 'Herhangi bir listedeki';
-    const checklist = { complete: 'kontrol listesi tamam olan', none: 'kontrol listesi olmayan', incomplete: 'kontrol listesinde eksik olan' }[rule.checklist];
-    const who = rule.by === 'me' ? 'yönetici' : 'herhangi biri';
+    const where = rule.list ? `“${rule.list}” listesindeki` : rule.except ? `“${rule.except}” dışındaki listelerde` : 'Herhangi bir listedeki';
+    const checklist = { complete: 'kontrol listesi tamam olan', none: 'kontrol listesi olmayan', incomplete: 'kontrol listesinde eksik olan', any: 'kontrol listesi olan (tamam ya da eksik)' }[rule.checklist];
+    const who = rule.by === 'me' ? 'yönetici' : 'atanmış üye veya yönetici';
     const actions = [
         rule.move_to && `“${rule.move_to}” listesinin en üstüne taşı`,
         rule.reset && 'tamamlanmadı yap',

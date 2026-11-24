@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
@@ -31,9 +32,32 @@ class Card extends Model
         return $this->hasMany(Comment::class)->latest('id');
     }
 
+    /** Karta atanmış herkes: üyeler (member) ve izleyiciler (viewer). */
+    public function people(): BelongsToMany
+    {
+        return $this->belongsToMany(User::class)->withPivot('role')->orderBy('users.id');
+    }
+
     public function members(): BelongsToMany
     {
-        return $this->belongsToMany(User::class);
+        return $this->people()->wherePivot('role', 'member');
+    }
+
+    public function scopeVisibleTo(Builder $query, User $user): void
+    {
+        if (! $user->is_admin) {
+            $query->whereHas('people', fn ($q) => $q->whereKey($user->id));
+        }
+    }
+
+    public function canView(User $user): bool
+    {
+        return $user->is_admin || $this->people()->whereKey($user->id)->exists();
+    }
+
+    public function canEdit(User $user): bool
+    {
+        return $user->is_admin || $this->members()->whereKey($user->id)->exists();
     }
 
     /** 'none': checklist yok, 'incomplete': işaretlenmemiş madde var, 'complete': hepsi tamam. */

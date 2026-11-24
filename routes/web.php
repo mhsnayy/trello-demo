@@ -33,7 +33,7 @@ Route::middleware(['auth', 'auth.session', RequirePasswordChange::class])->contr
     Route::get('/cards/{card}/history', 'history')->withTrashed();
     Route::post('/cards/{card}/move', 'moveCard');
     Route::post('/cards/{card}/complete', 'completeCard');
-    Route::post('/cards/{card}/members/{user}', 'toggleMember');
+    Route::put('/cards/{card}/people/{user}', 'setRole');
     Route::post('/cards/{card}/comments', 'storeComment');
     Route::post('/cards/{card}/checklists', 'storeChecklist');
 

@@ -36,6 +36,7 @@ class AutomationTest extends TestCase
     private function card(string $list, array $items = []): Card
     {
         $card = BoardList::firstWhere('name', $list)->cards()->create(['title' => 'Test', 'position' => 99]);
+        $card->members()->attach(User::where('is_admin', false)->first());
         if ($items) {
             $checklist = $card->checklists()->create(['name' => 'K']);
             foreach ($items as $checked) {
@@ -59,6 +60,7 @@ class AutomationTest extends TestCase
     {
         return [
             'kural 1' => [1, 'Yapılacaklar', [true, true], false, 'Yapılıyor', false],
+            'kural 1 eksik' => [1, 'Yapılacaklar', [true, false], false, 'Yapılıyor', false],
             'kural 2' => [2, 'Yapılıyor', [true], false, 'Yapıldı', false],
             'kural 3' => [3, 'Yapıldı', [true], false, 'Tamamlandı', false],
             'kural 4 yönetici' => [4, 'Tamamlandı', [true], true, self::DATE_LIST, true],
@@ -66,7 +68,7 @@ class AutomationTest extends TestCase
             'kural 6' => [6, 'Yapılıyor', [], false, 'Yapıldı', false],
             'kural 7' => [7, 'Yapıldı', [], false, 'Tamamlandı', false],
             'kural 8' => [8, 'Tamamlandı', [], true, self::DATE_LIST, true],
-            'kural 9' => [9, 'Yapılacaklar', [true, false], false, 'Yapılacaklar', false],
+            'kural 9' => [9, 'Yapılıyor', [true, false], false, 'Yapılıyor', false],
             'kural 9 tamamlandı' => [9, 'Tamamlandı', [false], true, 'Tamamlandı', false],
         ];
     }
@@ -225,7 +227,7 @@ class AutomationTest extends TestCase
 
         $this->actingAs($member);
         $this->putJson("/cards/{$card->id}", ['title' => 'x'])->assertForbidden();
-        $this->postJson("/cards/{$card->id}/members/{$member->id}")->assertForbidden();
+        $this->putJson("/cards/{$card->id}/people/{$member->id}", ['role' => null])->assertForbidden();
         $this->postJson("/cards/{$card->id}/checklists", ['name' => 'x'])->assertForbidden();
         $this->deleteJson("/checklists/{$checklist->id}")->assertForbidden();
         $this->postJson("/checklists/{$checklist->id}/items", ['name' => 'x'])->assertForbidden();

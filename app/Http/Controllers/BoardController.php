@@ -65,7 +65,8 @@ class BoardController extends Controller
     public function destroyList(BoardList $list)
     {
         abort_if($list->isProtected(), 422, 'Bu listeyi otomasyon kuralları kullanıyor, silinemez.');
-        abort_if($list->isDate() && ! Auth::user()->is_admin, 403, self::ADMIN_ONLY);
+        // Listede, silen kişinin göremediği kartlar olabilir.
+        abort_unless(Auth::user()->is_admin, 403, self::ADMIN_ONLY);
 
         DB::transaction(function () use ($list) {
             // Kartlar kaybolmasın: arşivlenir ve geri alındığında gideceği listeye bağlanır.
@@ -108,6 +109,10 @@ class BoardController extends Controller
         abort_if($list->isDate(), 422, 'Tarihli listelere elle kart eklenemez.');
         $data = $request->validate(['title' => 'required|string|max:255']);
         $card = $list->cards()->create($data + ['position' => ($list->cards()->max('position') ?? -1) + 1]);
+        // Kartı açan kişi göremez duruma düşmesin.
+        if (! Auth::user()->is_admin) {
+            $card->members()->attach(Auth::id());
+        }
         Activity::record($card, "kartı “{$list->name}” listesine ekledi");
 
         return $this->board();
@@ -119,7 +124,7 @@ class BoardController extends Controller
         $old = $card->title;
         $card->update($request->validate([
             'title' => 'sometimes|required|string|max:255',
-            'description' => 'sometimes|nullable|string|max:25500',
+            'description' => 'sometimes|nullable|string|max:10000',
             'due_date' => 'sometimes|nullable|date_format:Y-m-d',
         ]));
         if ($card->wasChanged('title')) {
@@ -138,6 +143,7 @@ class BoardController extends Controller
     /** Kart silinmez, arşive gider. */
     public function destroyCard(Card $card)
     {
+        $this->ensureMember($card);
         abort_if($card->list->isAdminOnly() && ! Auth::user()->is_admin, 403, self::ADMIN_ONLY);
         $card->delete();
         Activity::record($card, 'kartı arşivledi');
@@ -147,6 +153,7 @@ class BoardController extends Controller
 
     public function restoreCard(Card $card)
     {
+        $this->ensureMember($card);
         abort_if($card->list->isAdminOnly() && ! Auth::user()->is_admin, 403, self::ADMIN_ONLY);
 
         DB::transaction(function () use ($card) {
@@ -163,8 +170,14 @@ class BoardController extends Controller
 
     public function history(?Card $card = null)
     {
+        $user = Auth::user();
+        abort_if($card && ! $card->canView($user), 404);
+
         return Activity::with('user')
             ->when($card, fn ($q) => $q->where('card_id', $card->id))
+            ->when(! $card && ! $user->is_admin, fn ($q) => $q->where(fn ($q) => $q
+                ->whereNull('card_id')
+                ->orWhereIn('card_id', Card::withTrashed()->visibleTo($user)->select('id'))))
             ->latest('id')->limit(100)->get()
             ->map(fn ($activity) => [
                 'user' => $activity->user?->name ?? 'Silinmiş kullanıcı',
@@ -177,6 +190,7 @@ class BoardController extends Controller
     /** Sürükle-bırak. Kuralları tetiklemez. */
     public function moveCard(Request $request, Card $card)
     {
+        $this->ensureMember($card);
         $data = $request->validate([
             'list_id' => 'required|exists:board_lists,id',
             'index' => 'required|integer|min:0',
@@ -195,7 +209,10 @@ class BoardController extends Controller
                 $card->update(['completed' => false]);
             }
             $from = $card->list;
-            $card->moveTo($target, $data['index']);
+            // Gelen sıra, kullanıcının görebildiği kartlara göredir; tüm kartlar içindeki yerini bul.
+            $others = $target->cards()->whereKeyNot($card->id)->pluck('id');
+            $next = $target->cards()->whereKeyNot($card->id)->visibleTo(Auth::user())->pluck('id')->get($data['index']);
+            $card->moveTo($target, $next === null ? $others->count() : $others->search($next));
             if ($from->id !== $target->id) {
                 Activity::record($card, "“{$from->name}” listesinden “{$target->name}” listesine taşıdı");
             }
@@ -206,6 +223,7 @@ class BoardController extends Controller
 
     public function completeCard(Request $request, Card $card, AutomationEngine $automations)
     {
+        $this->ensureMember($card);
         $data = $request->validate(['completed' => 'required|boolean', 'list_id' => 'required|integer']);
 
         $notice = DB::transaction(function () use ($data, $card, $automations) {
@@ -231,17 +249,32 @@ class BoardController extends Controller
         return $this->board($notice);
     }
 
-    public function toggleMember(Card $card, User $user)
+    /** role: member (üye), viewer (izleyici) ya da null (karttan çıkar). */
+    public function setRole(Request $request, Card $card, User $user)
     {
         $this->ensureEditable($card);
-        $added = $card->members()->toggle($user)['attached'] !== [];
-        Activity::record($card, $added ? "{$user->name} adlı üyeyi ekledi" : "{$user->name} adlı üyeyi çıkardı");
+        $role = $request->validate(['role' => ['present', 'nullable', Rule::in(['member', 'viewer'])]])['role'];
+
+        if ($role === null) {
+            $changed = $card->people()->detach($user) > 0;
+        } else {
+            $changes = $card->people()->syncWithoutDetaching([$user->id => ['role' => $role]]);
+            $changed = $changes['attached'] !== [] || $changes['updated'] !== [];
+        }
+        if ($changed) {
+            Activity::record($card, $user->name.match ($role) {
+                'member' => ' adlı kişiyi üye yaptı',
+                'viewer' => ' adlı kişiyi izleyici yaptı',
+                null => ' adlı kişiyi karttan çıkardı',
+            });
+        }
 
         return $this->board();
     }
 
     public function storeComment(Request $request, Card $card)
     {
+        $this->ensureMember($card);
         $data = $request->validate(['body' => 'required|string|max:5000']);
         $card->comments()->create($data + ['user_id' => Auth::id()]);
 
@@ -300,34 +333,52 @@ class BoardController extends Controller
         return $this->board();
     }
 
+    /** Kartı göremeyen için kart yoktur; izleyici görür ama değiştiremez. */
+    private function ensureMember(?Card $card): void
+    {
+        abort_if($card === null || ! $card->canView(Auth::user()), 404);
+        abort_unless($card->canEdit(Auth::user()), 403, 'Bu karta sadece atanmış üyeler ve yönetici müdahale edebilir.');
+    }
+
     /** Onaylanmış (tarihli listedeki) kartı yalnızca yönetici düzenler; arşivdeki kart düzenlenmez. */
     private function ensureEditable(?Card $card): void
     {
-        abort_if($card === null, 404);
+        $this->ensureMember($card);
         abort_if($card->list->isDate() && ! Auth::user()->is_admin, 403, 'Onaylanmış kartı sadece yönetici düzenleyebilir.');
+    }
+
+    /** Pano çizilirken her kart için ayrı sorgu atmamak üzere yüklenmiş ilişkiyi kullanır. */
+    private function hasRole(Card $card, User $user, string $role): bool
+    {
+        return $card->people->contains(fn ($person) => $person->id === $user->id && $person->pivot->role === $role);
     }
 
     private function board(?string $notice = null): JsonResponse
     {
-        $lists = BoardList::with(['cards.members:id', 'cards.checklists.items', 'cards.comments'])
-            ->orderBy('position')->orderBy('id')->get();
+        $user = Auth::user();
+        $lists = BoardList::with([
+            'cards' => fn ($q) => $q->visibleTo($user),
+            'cards.people', 'cards.checklists.items', 'cards.comments',
+        ])->orderBy('position')->orderBy('id')->get();
 
         return response()->json([
             'notice' => $notice,
             'me' => Auth::id(),
             'users' => User::orderBy('id')->get(['id', 'name', 'color', 'is_admin']),
             'rules' => config('automations'),
-            'logs' => AutomationLog::with('user')->latest('id')->limit(20)->get()->map(fn ($log) => [
+            'logs' => AutomationLog::with('user')
+                ->when(! $user->is_admin, fn ($q) => $q->whereIn('card_id', Card::withTrashed()->visibleTo($user)->select('id')))
+                ->latest('id')->limit(20)->get()->map(fn ($log) => [
                 'rule_id' => $log->rule_id,
                 'message' => $log->message,
                 'user' => $log->user?->name,
                 'at' => $log->created_at->format('d.m.Y H:i'),
             ]),
-            'archived' => Card::onlyTrashed()->with('list')->latest('deleted_at')->latest('id')->get()->map(fn ($card) => [
+            'archived' => Card::onlyTrashed()->visibleTo($user)->with(['list', 'people'])->latest('deleted_at')->latest('id')->get()->map(fn ($card) => [
                 'id' => $card->id,
                 'title' => $card->title,
                 'list' => $card->list->name,
-                'admin_only' => $card->list->isAdminOnly(),
+                'can_restore' => $user->is_admin || (! $card->list->isAdminOnly() && $this->hasRole($card, $user, 'member')),
                 'at' => $card->deleted_at->format('d.m.Y H:i'),
             ]),
             'lists' => $lists->map(fn ($list) => [
@@ -343,7 +394,9 @@ class BoardController extends Controller
                     'description' => $card->description,
                     'due_date' => $card->due_date?->format('Y-m-d'),
                     'completed' => $card->completed,
-                    'members' => $card->members->pluck('id'),
+                    'members' => $card->people->where('pivot.role', 'member')->pluck('id')->values(),
+                    'viewers' => $card->people->where('pivot.role', 'viewer')->pluck('id')->values(),
+                    'can_edit' => $user->is_admin || $this->hasRole($card, $user, 'member'),
                     'checklists' => $card->checklists->map(fn ($checklist) => [
                         'id' => $checklist->id,
                         'name' => $checklist->name,

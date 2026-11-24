@@ -5,8 +5,9 @@
  * Hepsi kart "tamamlandı" olarak işaretlenince tetiklenir.
  *
  * list       : kartın bulunduğu liste (null = herhangi bir liste)
- * checklist  : complete | none | incomplete
- * by         : anyone | me (me = yönetici kullanıcı)
+ * except     : kuralın geçerli olmadığı liste (isteğe bağlı)
+ * checklist  : complete | none | incomplete | any (kontrol listesi var, tamam ya da eksik)
+ * by         : anyone | me (anyone = karta atanmış üyeler ve yönetici, me = yönetici)
  * move_to    : hedef liste, kart en üste taşınır (liste yoksa oluşturulur)
  * reset      : kartı tekrar "tamamlanmadı" yap
  * comment    : karta yazılacak yorum
@@ -15,7 +16,7 @@
 $date = '{date} - {weekdayname}';
 
 return [
-    ['id' => 1, 'list' => 'Yapılacaklar', 'checklist' => 'complete', 'by' => 'anyone', 'move_to' => 'Yapılıyor', 'reset' => true, 'comment' => null],
+    ['id' => 1, 'list' => 'Yapılacaklar', 'checklist' => 'any', 'by' => 'anyone', 'move_to' => 'Yapılıyor', 'reset' => true, 'comment' => null],
     ['id' => 2, 'list' => 'Yapılıyor', 'checklist' => 'complete', 'by' => 'anyone', 'move_to' => 'Yapıldı', 'reset' => true, 'comment' => null],
     ['id' => 3, 'list' => 'Yapıldı', 'checklist' => 'complete', 'by' => 'anyone', 'move_to' => 'Tamamlandı', 'reset' => true, 'comment' => null],
     ['id' => 4, 'list' => 'Tamamlandı', 'checklist' => 'complete', 'by' => 'me', 'move_to' => $date, 'reset' => false, 'comment' => null],
@@ -23,5 +24,5 @@ return [
     ['id' => 6, 'list' => 'Yapılıyor', 'checklist' => 'none', 'by' => 'anyone', 'move_to' => 'Yapıldı', 'reset' => true, 'comment' => null],
     ['id' => 7, 'list' => 'Yapıldı', 'checklist' => 'none', 'by' => 'anyone', 'move_to' => 'Tamamlandı', 'reset' => true, 'comment' => null],
     ['id' => 8, 'list' => 'Tamamlandı', 'checklist' => 'none', 'by' => 'me', 'move_to' => $date, 'reset' => false, 'comment' => null],
-    ['id' => 9, 'list' => null, 'checklist' => 'incomplete', 'by' => 'anyone', 'move_to' => null, 'reset' => true, 'comment' => 'Kontrol listesinde tamamlanmamış maddeler var'],
+    ['id' => 9, 'list' => null, 'except' => 'Yapılacaklar', 'checklist' => 'incomplete', 'by' => 'anyone', 'move_to' => null, 'reset' => true, 'comment' => 'Kontrol listesinde tamamlanmamış maddeler var'],
 ];
