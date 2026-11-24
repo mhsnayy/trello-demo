@@ -1,0 +1,244 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\AutomationLog;
+use App\Models\BoardList;
+use App\Models\Card;
+use App\Models\Checklist;
+use App\Models\ChecklistItem;
+use App\Models\User;
+use App\Services\AutomationEngine;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
+
+/** Her değişiklik, panonun güncel halini JSON olarak döndürür. */
+class BoardController extends Controller
+{
+    private const MESSAGES = ['name.unique' => 'Bu isimde bir liste zaten var.'];
+
+    public function index()
+    {
+        return view('board');
+    }
+
+    public function data(): JsonResponse
+    {
+        return $this->board();
+    }
+
+    public function switchUser(User $user)
+    {
+        Auth::login($user);
+
+        return response()->noContent();
+    }
+
+    // --- Listeler ---
+
+    public function storeList(Request $request)
+    {
+        $data = $request->validate(['name' => 'required|string|max:255|unique:board_lists'], self::MESSAGES);
+        BoardList::create($data + ['position' => BoardList::max('position') + 1]);
+
+        return $this->board();
+    }
+
+    public function updateList(Request $request, BoardList $list)
+    {
+        abort_if($list->isProtected(), 422, 'Bu listeyi otomasyon kuralları kullanıyor, adı değiştirilemez.');
+        $list->update($request->validate([
+            'name' => ['required', 'string', 'max:255', Rule::unique('board_lists')->ignore($list)],
+        ], self::MESSAGES));
+
+        return $this->board();
+    }
+
+    public function destroyList(BoardList $list)
+    {
+        abort_if($list->isProtected(), 422, 'Bu listeyi otomasyon kuralları kullanıyor, silinemez.');
+        $list->delete();
+
+        return $this->board();
+    }
+
+    public function moveList(Request $request, BoardList $list)
+    {
+        $index = $request->validate(['index' => 'required|integer|min:0'])['index'];
+
+        DB::transaction(function () use ($list, $index) {
+            $ids = BoardList::whereKeyNot($list->id)->orderBy('position')->orderBy('id')->pluck('id')->all();
+            array_splice($ids, $index, 0, [$list->id]);
+            foreach ($ids as $position => $id) {
+                BoardList::whereKey($id)->update(['position' => $position]);
+            }
+        });
+
+        return $this->board();
+    }
+
+    // --- Kartlar ---
+
+    public function storeCard(Request $request, BoardList $list)
+    {
+        $data = $request->validate(['title' => 'required|string|max:255']);
+        $list->cards()->create($data + ['position' => ($list->cards()->max('position') ?? -1) + 1]);
+
+        return $this->board();
+    }
+
+    public function updateCard(Request $request, Card $card)
+    {
+        $card->update($request->validate([
+            'title' => 'sometimes|required|string|max:255',
+            'description' => 'sometimes|nullable|string|max:25500',
+            'due_date' => 'sometimes|nullable|date_format:Y-m-d',
+        ]));
+
+        return $this->board();
+    }
+
+    public function destroyCard(Card $card)
+    {
+        $card->delete();
+
+        return $this->board();
+    }
+
+    /** Sürükle-bırak. Kuralları tetiklemez. */
+    public function moveCard(Request $request, Card $card)
+    {
+        $data = $request->validate([
+            'list_id' => 'required|exists:board_lists,id',
+            'index' => 'required|integer|min:0',
+        ]);
+        DB::transaction(fn () => $card->moveTo(BoardList::find($data['list_id']), $data['index']));
+
+        return $this->board();
+    }
+
+    public function completeCard(Request $request, Card $card, AutomationEngine $automations)
+    {
+        $data = $request->validate(['completed' => 'required|boolean', 'list_id' => 'required|integer']);
+
+        $notice = DB::transaction(function () use ($data, $card, $automations) {
+            $card->refresh();
+            // Kart bu sırada başka biri tarafından taşındıysa iki kez ilerletme.
+            if ($card->board_list_id !== (int) $data['list_id']) {
+                return 'Kart bu sırada başka bir listeye taşınmış.';
+            }
+            if ($card->completed === (bool) $data['completed']) {
+                return null;
+            }
+            abort_if(
+                $card->list->isAdminOnly() && ! Auth::user()->is_admin,
+                403,
+                'Tamamlandı listesindeki kartları sadece yönetici onaylayabilir.',
+            );
+            $card->update(['completed' => $data['completed']]);
+
+            return $card->completed ? $automations->cardCompleted($card, Auth::user()) : null;
+        });
+
+        return $this->board($notice);
+    }
+
+    public function toggleMember(Card $card, User $user)
+    {
+        $card->members()->toggle($user);
+
+        return $this->board();
+    }
+
+    public function storeComment(Request $request, Card $card)
+    {
+        $data = $request->validate(['body' => 'required|string|max:5000']);
+        $card->comments()->create($data + ['user_id' => Auth::id()]);
+
+        return $this->board();
+    }
+
+    // --- Kontrol listeleri ---
+
+    public function storeChecklist(Request $request, Card $card)
+    {
+        $card->checklists()->create($request->validate(['name' => 'required|string|max:255']));
+
+        return $this->board();
+    }
+
+    public function destroyChecklist(Checklist $checklist)
+    {
+        $checklist->delete();
+
+        return $this->board();
+    }
+
+    public function storeItem(Request $request, Checklist $checklist)
+    {
+        $checklist->items()->create($request->validate(['name' => 'required|string|max:255']));
+
+        return $this->board();
+    }
+
+    public function updateItem(Request $request, ChecklistItem $item)
+    {
+        $item->update($request->validate(['checked' => 'required|boolean']));
+
+        return $this->board();
+    }
+
+    public function destroyItem(ChecklistItem $item)
+    {
+        $item->delete();
+
+        return $this->board();
+    }
+
+    private function board(?string $notice = null): JsonResponse
+    {
+        $lists = BoardList::with(['cards.members:id', 'cards.checklists.items', 'cards.comments'])
+            ->orderBy('position')->orderBy('id')->get();
+
+        return response()->json([
+            'notice' => $notice,
+            'me' => Auth::id(),
+            'users' => User::orderBy('id')->get(['id', 'name', 'color', 'is_admin']),
+            'rules' => config('automations'),
+            'logs' => AutomationLog::with('user')->latest('id')->limit(20)->get()->map(fn ($log) => [
+                'rule_id' => $log->rule_id,
+                'message' => $log->message,
+                'user' => $log->user?->name,
+                'at' => $log->created_at->format('d.m.Y H:i'),
+            ]),
+            'lists' => $lists->map(fn ($list) => [
+                'id' => $list->id,
+                'name' => $list->name,
+                'protected' => $list->isProtected(),
+                'admin_only' => $list->isAdminOnly(),
+                'cards' => $list->cards->map(fn ($card) => [
+                    'id' => $card->id,
+                    'list_id' => $list->id,
+                    'title' => $card->title,
+                    'description' => $card->description,
+                    'due_date' => $card->due_date?->format('Y-m-d'),
+                    'completed' => $card->completed,
+                    'members' => $card->members->pluck('id'),
+                    'checklists' => $card->checklists->map(fn ($checklist) => [
+                        'id' => $checklist->id,
+                        'name' => $checklist->name,
+                        'items' => $checklist->items->map->only(['id', 'name', 'checked']),
+                    ]),
+                    'comments' => $card->comments->map(fn ($comment) => [
+                        'user_id' => $comment->user_id,
+                        'body' => $comment->body,
+                        'at' => $comment->created_at->format('d.m.Y H:i'),
+                    ]),
+                ]),
+            ]),
+        ]);
+    }
+}
