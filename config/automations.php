@@ -2,7 +2,6 @@
 
 /*
  * rules.md içindeki 9 kural (aynı sırayla).
- * Fark: 8. kural da yalnızca yöneticide çalışır; Tamamlandı listesini sadece yönetici onaylar.
  * Hepsi kart "tamamlandı" olarak işaretlenince tetiklenir.
  *
  * list       : kartın bulunduğu liste (null = herhangi bir liste)

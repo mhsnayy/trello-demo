@@ -124,6 +124,39 @@ class AutomationTest extends TestCase
         $this->assertSame(0, AutomationLog::count());
     }
 
+    public function test_non_admin_cannot_move_or_delete_approved_cards(): void
+    {
+        $done = BoardList::firstWhere('name', 'Tamamlandı');
+        $todo = BoardList::firstWhere('name', 'Yapılacaklar');
+        $date = BoardList::create(['name' => self::DATE_LIST, 'position' => 9]);
+        $move = fn (Card $card, BoardList $to) => $this->postJson("/cards/{$card->id}/move", ['list_id' => $to->id, 'index' => 0]);
+
+        $this->actingAs(User::where('is_admin', false)->first());
+        $move($this->card('Tamamlandı'), $date)->assertForbidden();
+        $move($this->card('Tamamlandı'), $todo)->assertForbidden();
+        $move($this->card('Yapılacaklar'), $date)->assertForbidden();
+        $move($this->card(self::DATE_LIST), $todo)->assertForbidden();
+        $move($this->card('Yapıldı'), $done)->assertOk();
+        $this->deleteJson("/cards/{$this->card('Tamamlandı')->id}")->assertForbidden();
+        $this->deleteJson("/lists/{$date->id}")->assertForbidden();
+        $this->postJson("/lists/{$date->id}/cards", ['title' => 'x'])->assertStatus(422);
+        $this->postJson('/lists', ['name' => '25.11.2026 - Çarşamba'])->assertStatus(422);
+
+        $this->actingAs(User::where('is_admin', true)->first());
+        $card = $this->complete($this->card('Tamamlandı'), true);
+        $move($card, $done)->assertOk();
+        $this->assertSame(['Tamamlandı', false], [$card->refresh()->list->name, $card->completed]);
+    }
+
+    public function test_list_order_ignores_date_lists(): void
+    {
+        BoardList::create(['name' => self::DATE_LIST, 'position' => 4]);
+        $a = BoardList::create(['name' => 'A', 'position' => 5]);
+        $b = BoardList::create(['name' => 'B', 'position' => 6]);
+        $this->postJson("/lists/{$b->id}/move", ['index' => 4])->assertOk();
+        $this->assertLessThan($a->refresh()->position, $b->refresh()->position);
+    }
+
     public function test_board_page_loads(): void
     {
         $this->get('/')->assertOk();

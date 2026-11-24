@@ -18,7 +18,12 @@ use Illuminate\Validation\Rule;
 /** Her değişiklik, panonun güncel halini JSON olarak döndürür. */
 class BoardController extends Controller
 {
-    private const MESSAGES = ['name.unique' => 'Bu isimde bir liste zaten var.'];
+    private const MESSAGES = [
+        'name.unique' => 'Bu isimde bir liste zaten var.',
+        'name.not_regex' => 'Tarihli listeler otomatik oluşturulur.',
+    ];
+
+    private const ADMIN_ONLY = 'Bu işlemi sadece yönetici yapabilir.';
 
     public function index()
     {
@@ -41,7 +46,7 @@ class BoardController extends Controller
 
     public function storeList(Request $request)
     {
-        $data = $request->validate(['name' => 'required|string|max:255|unique:board_lists'], self::MESSAGES);
+        $data = $request->validate(['name' => ['required', 'string', 'max:255', 'not_regex:'.BoardList::DATE_PATTERN, 'unique:board_lists']], self::MESSAGES);
         BoardList::create($data + ['position' => BoardList::max('position') + 1]);
 
         return $this->board();
@@ -50,8 +55,9 @@ class BoardController extends Controller
     public function updateList(Request $request, BoardList $list)
     {
         abort_if($list->isProtected(), 422, 'Bu listeyi otomasyon kuralları kullanıyor, adı değiştirilemez.');
+        abort_if($list->isDate(), 422, 'Tarihli listelerin adı değiştirilemez.');
         $list->update($request->validate([
-            'name' => ['required', 'string', 'max:255', Rule::unique('board_lists')->ignore($list)],
+            'name' => ['required', 'string', 'max:255', 'not_regex:'.BoardList::DATE_PATTERN, Rule::unique('board_lists')->ignore($list)],
         ], self::MESSAGES));
 
         return $this->board();
@@ -60,6 +66,7 @@ class BoardController extends Controller
     public function destroyList(BoardList $list)
     {
         abort_if($list->isProtected(), 422, 'Bu listeyi otomasyon kuralları kullanıyor, silinemez.');
+        abort_if($list->isDate() && ! Auth::user()->is_admin, 403, self::ADMIN_ONLY);
         $list->delete();
 
         return $this->board();
@@ -70,7 +77,9 @@ class BoardController extends Controller
         $index = $request->validate(['index' => 'required|integer|min:0'])['index'];
 
         DB::transaction(function () use ($list, $index) {
-            $ids = BoardList::whereKeyNot($list->id)->orderBy('position')->orderBy('id')->pluck('id')->all();
+            // Tarihli listeler ayrı sekmede olduğu için sıralamaya girmez.
+            $ids = BoardList::whereKeyNot($list->id)->orderBy('position')->orderBy('id')->get()
+                ->reject->isDate()->pluck('id')->all();
             array_splice($ids, $index, 0, [$list->id]);
             foreach ($ids as $position => $id) {
                 BoardList::whereKey($id)->update(['position' => $position]);
@@ -84,6 +93,7 @@ class BoardController extends Controller
 
     public function storeCard(Request $request, BoardList $list)
     {
+        abort_if($list->isDate(), 422, 'Tarihli listelere elle kart eklenemez.');
         $data = $request->validate(['title' => 'required|string|max:255']);
         $list->cards()->create($data + ['position' => ($list->cards()->max('position') ?? -1) + 1]);
 
@@ -103,6 +113,7 @@ class BoardController extends Controller
 
     public function destroyCard(Card $card)
     {
+        abort_if($card->list->isAdminOnly() && ! Auth::user()->is_admin, 403, self::ADMIN_ONLY);
         $card->delete();
 
         return $this->board();
@@ -115,7 +126,21 @@ class BoardController extends Controller
             'list_id' => 'required|exists:board_lists,id',
             'index' => 'required|integer|min:0',
         ]);
-        DB::transaction(fn () => $card->moveTo(BoardList::find($data['list_id']), $data['index']));
+        $target = BoardList::find($data['list_id']);
+
+        DB::transaction(function () use ($card, $target, $data) {
+            $card->refresh();
+            abort_if(
+                ($card->list->isAdminOnly() || $target->isDate()) && ! Auth::user()->is_admin,
+                403,
+                'Bu kartı sadece yönetici taşıyabilir.',
+            );
+            // Tamamlananlardan geri alınan kart yeniden onay bekler.
+            if ($card->list->isDate() && ! $target->isDate()) {
+                $card->update(['completed' => false]);
+            }
+            $card->moveTo($target, $data['index']);
+        });
 
         return $this->board();
     }
@@ -136,7 +161,7 @@ class BoardController extends Controller
             abort_if(
                 $card->list->isAdminOnly() && ! Auth::user()->is_admin,
                 403,
-                'Tamamlandı listesindeki kartları sadece yönetici onaylayabilir.',
+                'Bu kartı sadece yönetici onaylayabilir.',
             );
             $card->update(['completed' => $data['completed']]);
 
@@ -218,6 +243,7 @@ class BoardController extends Controller
                 'id' => $list->id,
                 'name' => $list->name,
                 'protected' => $list->isProtected(),
+                'is_date' => $list->isDate(),
                 'admin_only' => $list->isAdminOnly(),
                 'cards' => $list->cards->map(fn ($card) => [
                     'id' => $card->id,

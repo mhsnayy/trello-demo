@@ -10,6 +10,10 @@
 <body>
     <header>
         <h1>{{ config('app.name') }}</h1>
+        <nav>
+            <a href="#" data-view="">Pano</a>
+            <a href="#tamamlananlar" data-view="#tamamlananlar">Tamamlananlar <span id="done-count"></span></a>
+        </nav>
         <button id="automations-button" class="ghost">⚡ Otomasyonlar</button>
         <label id="user-switch">Kullanıcı: <select id="user-select"></select></label>
     </header>

@@ -77,6 +77,9 @@ function mutate(method, url, body, { keepDialog = false } = {}) {
 }
 
 const user = (id) => state.users.find((u) => u.id === id);
+const isAdmin = () => user(state.me).is_admin;
+const isLocked = (list) => list.admin_only && !isAdmin();
+const showingDone = () => location.hash === '#tamamlananlar';
 const findCard = (id) => state.lists.flatMap((l) => l.cards).find((c) => c.id === id);
 const items = (card) => card.checklists.flatMap((c) => c.items);
 
@@ -104,7 +107,7 @@ function addForm(key, placeholder, buttonText, submit) {
 }
 
 function completeBox(card) {
-    const locked = state.lists.find((l) => l.id === card.list_id).admin_only && !user(state.me).is_admin;
+    const locked = isLocked(state.lists.find((l) => l.id === card.list_id));
     return h('input', {
         type: 'checkbox',
         checked: card.completed,
@@ -154,7 +157,25 @@ function renderUsers() {
 
 function renderBoard() {
     const scroll = boardEl.scrollLeft;
-    const lists = h('div', { class: 'lists' }, state.lists.map(renderList));
+    const doneLists = state.lists.filter((l) => l.is_date);
+    $('#done-count').textContent = doneLists.reduce((sum, l) => sum + l.cards.length, 0);
+    document.querySelectorAll('[data-view]').forEach((a) => {
+        if ((a.dataset.view !== '') === showingDone()) a.setAttribute('aria-current', 'page');
+        else a.removeAttribute('aria-current');
+    });
+
+    if (showingDone()) {
+        // En yeni tarih solda.
+        const key = (l) => l.name.slice(0, 10).split('.').reverse().join('');
+        doneLists.sort((a, b) => key(b).localeCompare(key(a)));
+        boardEl.replaceChildren(doneLists.length
+            ? h('div', { class: 'lists' }, doneLists.map(renderList))
+            : h('p', { class: 'empty' }, 'Henüz onaylanmış kart yok. Yönetici “Tamamlandı” listesindeki kartları onayladıkça burada görünür.'));
+        boardEl.scrollLeft = scroll;
+        return;
+    }
+
+    const lists = h('div', { class: 'lists' }, state.lists.filter((l) => !l.is_date).map(renderList));
     boardEl.replaceChildren(lists, h('div', { class: 'new-list' },
         addForm('new-list', 'Yeni liste adı', 'Ekle', (name) => mutate('POST', '/lists', { name }))));
     boardEl.scrollLeft = scroll;
@@ -167,21 +188,23 @@ function renderBoard() {
             if (e.oldIndex !== e.newIndex) mutate('POST', `/lists/${e.item.dataset.id}/move`, { index: e.newIndex });
         },
     });
-    lists.querySelectorAll('.cards').forEach((el) => Sortable.create(el, {
-        ...drag, group: 'cards',
-        onEnd: (e) => {
-            dragging = false;
-            if (e.from === e.to && e.oldIndex === e.newIndex) return;
-            mutate('POST', `/cards/${e.item.dataset.id}/move`, { list_id: Number(e.to.dataset.id), index: e.newIndex });
-        },
-    }));
+    lists.querySelectorAll('.cards').forEach((el) => {
+        const locked = isLocked(state.lists.find((l) => l.id === Number(el.dataset.id)));
+        Sortable.create(el, {
+            ...drag, group: { name: 'cards', pull: !locked, put: true }, sort: !locked,
+            onEnd: (e) => {
+                dragging = false;
+                if (e.from === e.to && e.oldIndex === e.newIndex) return;
+                mutate('POST', `/cards/${e.item.dataset.id}/move`, { list_id: Number(e.to.dataset.id), index: e.newIndex });
+            },
+        });
+    });
 }
 
 /** Ana akış sıcak tonlardan yeşile ilerler; tarih listeleri en yeşil, özel listeler nötr mavi-mor tonlardadır. */
 function listColor(list) {
     const flow = { 'Yapılacaklar': [12, 60, 92], 'Yapılıyor': [43, 70, 89], 'Yapıldı': [78, 45, 87], 'Tamamlandı': [125, 35, 86] };
-    const isDate = /^[0-9]{2}[.][0-9]{2}[.][0-9]{4} - /.test(list.name);
-    const [hue, sat, light] = flow[list.name] ?? (isDate ? [155, 38, 80] : [210 + (list.id * 37) % 110, 30, 91]);
+    const [hue, sat, light] = flow[list.name] ?? (list.is_date ? [155, 38, 80] : [210 + (list.id * 37) % 110, 30, 91]);
     return `--list-bg:hsl(${hue} ${sat}% ${light}%);--list-line:hsl(${hue} ${sat}% ${light - 28}%)`;
 }
 
@@ -190,15 +213,15 @@ function renderList(list) {
         h('div', { class: 'list-head' },
             h('h2', {}, list.name),
             h('span', { class: 'count' }, String(list.cards.length)),
-            !list.protected && h('button', { class: 'icon', title: 'Yeniden adlandır', onclick: () => {
+            !list.protected && !list.is_date && h('button', { class: 'icon', title: 'Yeniden adlandır', onclick: () => {
                 const name = prompt('Liste adı', list.name)?.trim();
                 if (name && name !== list.name) mutate('PUT', `/lists/${list.id}`, { name });
             } }, '✎'),
-            !list.protected && h('button', { class: 'icon', title: 'Listeyi sil', onclick: () => {
+            !list.protected && !isLocked(list) && h('button', { class: 'icon', title: 'Listeyi sil', onclick: () => {
                 if (confirm(`“${list.name}” ve içindeki ${list.cards.length} kart silinsin mi?`)) mutate('DELETE', `/lists/${list.id}`);
             } }, '✕')),
         h('div', { class: 'cards', 'data-id': list.id, 'data-scroll': `list-${list.id}` }, list.cards.map(renderCard)),
-        addForm(`card-${list.id}`, 'Kart ekle', '+', (title) => mutate('POST', `/lists/${list.id}/cards`, { title })));
+        !list.is_date && addForm(`card-${list.id}`, 'Kart ekle', '+', (title) => mutate('POST', `/lists/${list.id}/cards`, { title })));
 }
 
 function renderCard(card) {
@@ -270,7 +293,11 @@ function renderCardDialog() {
                 h('h3', {}, 'Yeni kontrol listesi'),
                 addForm('new-checklist', 'Kontrol listesi adı', 'Ekle', (name) => mutate('POST', `/cards/${card.id}/checklists`, { name })),
 
-                h('div', { style: 'margin-top:20px' }, h('button', { class: 'danger', onclick: () => {
+                list.is_date && isAdmin() && h('div', { style: 'margin-top:20px' }, h('button', { onclick: () => {
+                    const target = state.lists.find((l) => l.name === 'Tamamlandı');
+                    mutate('POST', `/cards/${card.id}/move`, { list_id: target.id, index: 0 });
+                } }, '↩ Tamamlandı listesine geri al')),
+                !isLocked(list) && h('div', { style: 'margin-top:20px' }, h('button', { class: 'danger', onclick: () => {
                     if (confirm('Kart silinsin mi?')) mutate('DELETE', `/cards/${card.id}`);
                 } }, 'Kartı sil'))),
 
@@ -367,6 +394,12 @@ async function poll() {
         if (!state) toast('Pano yüklenemedi.');
     }
 }
+
+window.addEventListener('hashchange', () => {
+    if (!state) return;
+    renderBoard();
+    boardEl.scrollLeft = 0;
+});
 
 poll();
 setInterval(poll, 4000); // diğer kullanıcıların değişikliklerini al
