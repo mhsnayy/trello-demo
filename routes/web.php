@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Route;
 Route::middleware(UseMockUser::class)->controller(BoardController::class)->group(function () {
     Route::get('/', 'index');
     Route::get('/board', 'data');
+    Route::get('/history', 'history');
     Route::post('/switch-user/{user}', 'switchUser');
 
     Route::post('/lists', 'storeList');
@@ -17,6 +18,8 @@ Route::middleware(UseMockUser::class)->controller(BoardController::class)->group
 
     Route::put('/cards/{card}', 'updateCard');
     Route::delete('/cards/{card}', 'destroyCard');
+    Route::post('/cards/{card}/restore', 'restoreCard')->withTrashed();
+    Route::get('/cards/{card}/history', 'history')->withTrashed();
     Route::post('/cards/{card}/move', 'moveCard');
     Route::post('/cards/{card}/complete', 'completeCard');
     Route::post('/cards/{card}/members/{user}', 'toggleMember');

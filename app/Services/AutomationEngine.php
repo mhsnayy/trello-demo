@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\Activity;
 use App\Models\AutomationLog;
 use App\Models\BoardList;
 use App\Models\Card;
@@ -30,21 +31,23 @@ class AutomationEngine
 
     private function run(array $rule, Card $card, User $actor): string
     {
-        $message = "“{$card->title}”: ";
+        $done = [];
 
         if ($rule['move_to']) {
             $list = $this->targetList($rule['move_to']);
             $card->moveTo($list);
-            $message .= "“{$list->name}” listesine taşındı";
+            $done[] = "“{$list->name}” listesine taşındı";
         }
         if ($rule['reset']) {
             $card->update(['completed' => false]);
         }
         if ($rule['comment']) {
             $card->comments()->create(['body' => $rule['comment']]);
-            $message .= $rule['comment'];
+            $done[] = $rule['comment'];
         }
+        $message = "“{$card->title}”: ".implode(', ', $done);
 
+        Activity::record($card, "⚡ Kural {$rule['id']}: ".implode(', ', $done));
         AutomationLog::create(['rule_id' => $rule['id'], 'user_id' => $actor->id, 'message' => $message]);
 
         return $message;

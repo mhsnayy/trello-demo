@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Activity;
 use App\Models\AutomationLog;
 use App\Models\BoardList;
 use App\Models\Card;
@@ -47,7 +48,8 @@ class BoardController extends Controller
     public function storeList(Request $request)
     {
         $data = $request->validate(['name' => ['required', 'string', 'max:255', 'not_regex:'.BoardList::DATE_PATTERN, 'unique:board_lists']], self::MESSAGES);
-        BoardList::create($data + ['position' => BoardList::max('position') + 1]);
+        $list = BoardList::create($data + ['position' => BoardList::max('position') + 1]);
+        Activity::record($list, 'listeyi oluşturdu');
 
         return $this->board();
     }
@@ -56,9 +58,13 @@ class BoardController extends Controller
     {
         abort_if($list->isProtected(), 422, 'Bu listeyi otomasyon kuralları kullanıyor, adı değiştirilemez.');
         abort_if($list->isDate(), 422, 'Tarihli listelerin adı değiştirilemez.');
+        $old = $list->name;
         $list->update($request->validate([
             'name' => ['required', 'string', 'max:255', 'not_regex:'.BoardList::DATE_PATTERN, Rule::unique('board_lists')->ignore($list)],
         ], self::MESSAGES));
+        if ($list->wasChanged('name')) {
+            Activity::record($list, "listenin adını değiştirdi (eski: “{$old}”)");
+        }
 
         return $this->board();
     }
@@ -67,7 +73,20 @@ class BoardController extends Controller
     {
         abort_if($list->isProtected(), 422, 'Bu listeyi otomasyon kuralları kullanıyor, silinemez.');
         abort_if($list->isDate() && ! Auth::user()->is_admin, 403, self::ADMIN_ONLY);
-        $list->delete();
+
+        DB::transaction(function () use ($list) {
+            // Kartlar kaybolmasın: arşivlenir ve geri alındığında gideceği listeye bağlanır.
+            $fallback = BoardList::where('name', $list->isDate() ? 'Tamamlandı' : 'Yapılacaklar')->firstOrFail();
+            foreach ($list->cards()->withTrashed()->get() as $card) {
+                $card->update(['board_list_id' => $fallback->id, 'completed' => false]);
+                if (! $card->trashed()) {
+                    $card->delete();
+                    Activity::record($card, "“{$list->name}” listesi silinirken arşivlendi");
+                }
+            }
+            Activity::record($list, 'listeyi sildi, kartlarını arşivledi');
+            $list->delete();
+        });
 
         return $this->board();
     }
@@ -95,28 +114,71 @@ class BoardController extends Controller
     {
         abort_if($list->isDate(), 422, 'Tarihli listelere elle kart eklenemez.');
         $data = $request->validate(['title' => 'required|string|max:255']);
-        $list->cards()->create($data + ['position' => ($list->cards()->max('position') ?? -1) + 1]);
+        $card = $list->cards()->create($data + ['position' => ($list->cards()->max('position') ?? -1) + 1]);
+        Activity::record($card, "kartı “{$list->name}” listesine ekledi");
 
         return $this->board();
     }
 
     public function updateCard(Request $request, Card $card)
     {
+        $this->ensureEditable($card);
+        $old = $card->title;
         $card->update($request->validate([
             'title' => 'sometimes|required|string|max:255',
             'description' => 'sometimes|nullable|string|max:25500',
             'due_date' => 'sometimes|nullable|date_format:Y-m-d',
         ]));
+        if ($card->wasChanged('title')) {
+            Activity::record($card, "başlığı değiştirdi (eski: “{$old}”)");
+        }
+        if ($card->wasChanged('description')) {
+            Activity::record($card, 'açıklamayı değiştirdi');
+        }
+        if ($card->wasChanged('due_date')) {
+            Activity::record($card, 'bitiş tarihini '.($card->due_date?->format('d.m.Y') ?? 'boş').' yaptı');
+        }
 
         return $this->board();
     }
 
+    /** Kart silinmez, arşive gider. */
     public function destroyCard(Card $card)
     {
         abort_if($card->list->isAdminOnly() && ! Auth::user()->is_admin, 403, self::ADMIN_ONLY);
         $card->delete();
+        Activity::record($card, 'kartı arşivledi');
 
         return $this->board();
+    }
+
+    public function restoreCard(Card $card)
+    {
+        abort_if($card->list->isAdminOnly() && ! Auth::user()->is_admin, 403, self::ADMIN_ONLY);
+
+        DB::transaction(function () use ($card) {
+            if (! $card->trashed()) {
+                return;
+            }
+            $card->restore();
+            $card->moveTo($card->list, $card->list->cards()->count());
+            Activity::record($card, "kartı arşivden “{$card->list->name}” listesine geri aldı");
+        });
+
+        return $this->board();
+    }
+
+    public function history(?Card $card = null)
+    {
+        return Activity::with('user')
+            ->when($card, fn ($q) => $q->where('card_id', $card->id))
+            ->latest('id')->limit(100)->get()
+            ->map(fn ($activity) => [
+                'user' => $activity->user?->name ?? 'Silinmiş kullanıcı',
+                'subject' => $activity->subject,
+                'message' => $activity->message,
+                'at' => $activity->created_at->format('d.m.Y H:i'),
+            ]);
     }
 
     /** Sürükle-bırak. Kuralları tetiklemez. */
@@ -139,7 +201,11 @@ class BoardController extends Controller
             if ($card->list->isDate() && ! $target->isDate()) {
                 $card->update(['completed' => false]);
             }
+            $from = $card->list;
             $card->moveTo($target, $data['index']);
+            if ($from->id !== $target->id) {
+                Activity::record($card, "“{$from->name}” listesinden “{$target->name}” listesine taşıdı");
+            }
         });
 
         return $this->board();
@@ -164,6 +230,7 @@ class BoardController extends Controller
                 'Bu kartı sadece yönetici onaylayabilir.',
             );
             $card->update(['completed' => $data['completed']]);
+            Activity::record($card, $card->completed ? 'tamamlandı olarak işaretledi' : 'tamamlandı işaretini kaldırdı');
 
             return $card->completed ? $automations->cardCompleted($card, Auth::user()) : null;
         });
@@ -173,7 +240,9 @@ class BoardController extends Controller
 
     public function toggleMember(Card $card, User $user)
     {
-        $card->members()->toggle($user);
+        $this->ensureEditable($card);
+        $added = $card->members()->toggle($user)['attached'] !== [];
+        Activity::record($card, $added ? "{$user->name} adlı üyeyi ekledi" : "{$user->name} adlı üyeyi çıkardı");
 
         return $this->board();
     }
@@ -190,37 +259,59 @@ class BoardController extends Controller
 
     public function storeChecklist(Request $request, Card $card)
     {
-        $card->checklists()->create($request->validate(['name' => 'required|string|max:255']));
+        $this->ensureEditable($card);
+        $checklist = $card->checklists()->create($request->validate(['name' => 'required|string|max:255']));
+        Activity::record($card, "“{$checklist->name}” kontrol listesini ekledi");
 
         return $this->board();
     }
 
     public function destroyChecklist(Checklist $checklist)
     {
+        $this->ensureEditable($checklist->card);
+        $items = $checklist->items->map(fn ($item) => ($item->checked ? '☑ ' : '☐ ').$item->name)->implode(', ');
         $checklist->delete();
+        Activity::record($checklist->card, "“{$checklist->name}” kontrol listesini sildi".($items ? " ({$items})" : ''));
 
         return $this->board();
     }
 
     public function storeItem(Request $request, Checklist $checklist)
     {
-        $checklist->items()->create($request->validate(['name' => 'required|string|max:255']));
+        $this->ensureEditable($checklist->card);
+        $item = $checklist->items()->create($request->validate(['name' => 'required|string|max:255']));
+        Activity::record($checklist->card, "“{$item->name}” maddesini ekledi");
 
         return $this->board();
     }
 
     public function updateItem(Request $request, ChecklistItem $item)
     {
+        $card = $item->checklist->card;
+        $this->ensureEditable($card);
         $item->update($request->validate(['checked' => 'required|boolean']));
+        if ($item->wasChanged('checked')) {
+            Activity::record($card, "“{$item->name}” maddesini ".($item->checked ? 'işaretledi' : 'işaretsiz yaptı'));
+        }
 
         return $this->board();
     }
 
     public function destroyItem(ChecklistItem $item)
     {
+        $card = $item->checklist->card;
+        $this->ensureEditable($card);
         $item->delete();
+        Activity::record($card, "“{$item->name}” maddesini sildi");
 
         return $this->board();
+    }
+
+    /** Onaylanmış (tarihli listedeki) kartı yalnızca yönetici düzenler; arşivdeki kart düzenlenmez. */
+    private function ensureEditable(?Card $card): void
+    {
+        abort_if($card === null, 404);
+        abort_if($card->list->isDate() && ! Auth::user()->is_admin, 403, 'Onaylanmış kartı sadece yönetici düzenleyebilir.');
     }
 
     private function board(?string $notice = null): JsonResponse
@@ -238,6 +329,13 @@ class BoardController extends Controller
                 'message' => $log->message,
                 'user' => $log->user?->name,
                 'at' => $log->created_at->format('d.m.Y H:i'),
+            ]),
+            'archived' => Card::onlyTrashed()->with('list')->latest('deleted_at')->latest('id')->get()->map(fn ($card) => [
+                'id' => $card->id,
+                'title' => $card->title,
+                'list' => $card->list->name,
+                'admin_only' => $card->list->isAdminOnly(),
+                'at' => $card->deleted_at->format('d.m.Y H:i'),
             ]),
             'lists' => $lists->map(fn ($list) => [
                 'id' => $list->id,

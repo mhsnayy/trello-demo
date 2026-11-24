@@ -157,6 +157,79 @@ class AutomationTest extends TestCase
         $this->assertLessThan($a->refresh()->position, $b->refresh()->position);
     }
 
+    public function test_cards_are_archived_and_restored(): void
+    {
+        $this->actingAs(User::where('is_admin', false)->first());
+        $card = $this->card('Yapılıyor', [true]);
+        $this->deleteJson("/cards/{$card->id}")->assertOk()->assertJsonPath('archived.0.id', $card->id);
+        $this->postJson("/cards/{$card->id}/comments", ['body' => 'x'])->assertNotFound();
+        $this->putJson("/items/{$card->checklists->first()->items->first()->id}", ['checked' => false])->assertNotFound();
+        $this->postJson("/cards/{$card->id}/restore")->assertOk()->assertJsonCount(0, 'archived');
+        $this->assertSame('Yapılıyor', $card->refresh()->list->name);
+        $this->assertSame(1, $card->checklists()->count());
+        $this->getJson("/cards/{$card->id}/history")->assertOk()->assertJsonCount(2)
+            ->assertJsonPath('1.message', 'kartı arşivledi');
+    }
+
+    public function test_deleting_list_archives_cards(): void
+    {
+        $date = BoardList::create(['name' => self::DATE_LIST, 'position' => 9]);
+        $custom = BoardList::create(['name' => 'Özel', 'position' => 10]);
+        $a = $this->card(self::DATE_LIST);
+        $b = $this->card('Özel');
+        $old = $this->card('Özel');
+        $old->delete();
+        $this->actingAs(User::where('is_admin', true)->first());
+        $this->deleteJson("/lists/{$date->id}")->assertOk();
+        $this->deleteJson("/lists/{$custom->id}")->assertOk()->assertJsonCount(3, 'archived');
+
+        $this->actingAs(User::where('is_admin', false)->first());
+        $this->postJson("/cards/{$a->id}/restore")->assertForbidden();
+        $this->postJson("/cards/{$b->id}/restore")->assertOk();
+        $this->assertSame('Yapılacaklar', $b->refresh()->list->name);
+        $this->assertSame('Tamamlandı', Card::withTrashed()->find($a->id)->list->name);
+    }
+
+    public function test_history_records_manual_and_automatic_changes(): void
+    {
+        $card = $this->card('Yapılacaklar');
+        $this->complete($card, false);
+        $this->putJson("/cards/{$card->id}", ['title' => 'Yeni'])->assertOk();
+        $this->putJson("/cards/{$card->id}", ['title' => 'Yeni'])->assertOk();
+        $messages = array_column($this->getJson("/cards/{$card->id}/history")->json(), 'message');
+        $this->assertSame([
+            'başlığı değiştirdi (eski: “Test”)',
+            '⚡ Kural 5: “Yapılıyor” listesine taşındı',
+            'tamamlandı olarak işaretledi',
+        ], $messages);
+        $this->getJson('/history')->assertOk()->assertJsonCount(3);
+    }
+
+    public function test_approved_card_is_locked_for_members(): void
+    {
+        BoardList::create(['name' => self::DATE_LIST, 'position' => 9]);
+        $card = $this->card(self::DATE_LIST, [true]);
+        $checklist = $card->checklists->first();
+        $item = $checklist->items->first();
+        $member = User::where('is_admin', false)->first();
+
+        $this->actingAs($member);
+        $this->putJson("/cards/{$card->id}", ['title' => 'x'])->assertForbidden();
+        $this->postJson("/cards/{$card->id}/members/{$member->id}")->assertForbidden();
+        $this->postJson("/cards/{$card->id}/checklists", ['name' => 'x'])->assertForbidden();
+        $this->deleteJson("/checklists/{$checklist->id}")->assertForbidden();
+        $this->postJson("/checklists/{$checklist->id}/items", ['name' => 'x'])->assertForbidden();
+        $this->putJson("/items/{$item->id}", ['checked' => false])->assertForbidden();
+        $this->deleteJson("/items/{$item->id}")->assertForbidden();
+        $this->postJson("/cards/{$card->id}/comments", ['body' => 'x'])->assertOk();
+
+        // Onay bekleyen kart hâlâ düzenlenebilir.
+        $this->putJson("/cards/{$this->card('Tamamlandı')->id}", ['title' => 'x'])->assertOk();
+
+        $this->actingAs(User::where('is_admin', true)->first());
+        $this->putJson("/cards/{$card->id}", ['title' => 'x'])->assertOk();
+    }
+
     public function test_board_page_loads(): void
     {
         $this->get('/')->assertOk();

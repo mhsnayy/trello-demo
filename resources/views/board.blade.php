@@ -13,13 +13,16 @@
         <nav>
             <a href="#" data-view="">Pano</a>
             <a href="#tamamlananlar" data-view="#tamamlananlar">Tamamlananlar <span id="done-count"></span></a>
+            <a href="#arsiv" data-view="#arsiv">Arşiv</a>
         </nav>
         <button id="automations-button" class="ghost">⚡ Otomasyonlar</button>
+        <button id="history-button" class="ghost">🕘 Geçmiş</button>
         <label id="user-switch">Kullanıcı: <select id="user-select"></select></label>
     </header>
     <main id="board"></main>
     <dialog id="card-dialog"></dialog>
     <dialog id="automations-dialog"></dialog>
+    <dialog id="history-dialog"></dialog>
     <div id="toast" role="status"></div>
 
     <script src="/vendor/Sortable.min.js"></script>

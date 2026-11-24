@@ -2,6 +2,7 @@ const $ = (selector) => document.querySelector(selector);
 const boardEl = $('#board');
 const cardDialog = $('#card-dialog');
 const rulesDialog = $('#automations-dialog');
+const historyDialog = $('#history-dialog');
 
 let state = null;       // sunucudan gelen son pano
 let openCardId = null;
@@ -79,7 +80,7 @@ function mutate(method, url, body, { keepDialog = false } = {}) {
 const user = (id) => state.users.find((u) => u.id === id);
 const isAdmin = () => user(state.me).is_admin;
 const isLocked = (list) => list.admin_only && !isAdmin();
-const showingDone = () => location.hash === '#tamamlananlar';
+const currentView = () => (['#tamamlananlar', '#arsiv'].includes(location.hash) ? location.hash : '');
 const findCard = (id) => state.lists.flatMap((l) => l.cards).find((c) => c.id === id);
 const items = (card) => card.checklists.flatMap((c) => c.items);
 
@@ -160,11 +161,15 @@ function renderBoard() {
     const doneLists = state.lists.filter((l) => l.is_date);
     $('#done-count').textContent = doneLists.reduce((sum, l) => sum + l.cards.length, 0);
     document.querySelectorAll('[data-view]').forEach((a) => {
-        if ((a.dataset.view !== '') === showingDone()) a.setAttribute('aria-current', 'page');
+        if (a.dataset.view === currentView()) a.setAttribute('aria-current', 'page');
         else a.removeAttribute('aria-current');
     });
 
-    if (showingDone()) {
+    if (currentView() === '#arsiv') {
+        boardEl.replaceChildren(renderArchive());
+        return;
+    }
+    if (currentView() === '#tamamlananlar') {
         // En yeni tarih solda.
         const key = (l) => l.name.slice(0, 10).split('.').reverse().join('');
         doneLists.sort((a, b) => key(b).localeCompare(key(a)));
@@ -208,6 +213,33 @@ function listColor(list) {
     return `--list-bg:hsl(${hue} ${sat}% ${light}%);--list-line:hsl(${hue} ${sat}% ${light - 28}%)`;
 }
 
+function renderArchive() {
+    if (!state.archived.length) return h('p', { class: 'empty' }, 'Arşivde kart yok.');
+    return h('div', { class: 'archive', 'data-scroll': 'archive' }, state.archived.map((card) => h('div', { class: 'archive-row' },
+        h('div', {}, h('strong', {}, card.title), h('div', { class: 'muted' }, `${card.list} · ${card.at}`)),
+        h('button', { onclick: () => openHistory(`/cards/${card.id}/history`, card.title) }, 'Geçmiş'),
+        h('button', {
+            class: 'primary', disabled: card.admin_only && !isAdmin(),
+            title: card.admin_only && !isAdmin() ? 'Sadece yönetici geri alabilir' : null,
+            onclick: () => mutate('POST', `/cards/${card.id}/restore`),
+        }, 'Geri al'))));
+}
+
+async function openHistory(url, title) {
+    try {
+        const rows = await request('GET', url);
+        historyDialog.replaceChildren(
+            h('div', { class: 'dialog-head' }, h('h2', {}, title ? `Geçmiş: ${title}` : 'Geçmiş (son 100 işlem)'),
+                h('button', { class: 'icon', 'aria-label': 'Kapat', onclick: () => historyDialog.close() }, '✕')),
+            rows.length
+                ? h('ul', { class: 'rules' }, rows.map((r) => h('li', {}, h('strong', {}, r.user), title ? ' ' : ` “${r.subject}”: `, r.message, ' ', h('span', { class: 'muted' }, r.at))))
+                : h('p', { class: 'muted' }, 'Henüz kayıt yok.'));
+        if (!historyDialog.open) historyDialog.showModal();
+    } catch (error) {
+        toast(error.message);
+    }
+}
+
 function renderList(list) {
     return h('section', { class: 'list', 'data-id': list.id, style: listColor(list) },
         h('div', { class: 'list-head' },
@@ -218,7 +250,7 @@ function renderList(list) {
                 if (name && name !== list.name) mutate('PUT', `/lists/${list.id}`, { name });
             } }, '✎'),
             !list.protected && !isLocked(list) && h('button', { class: 'icon', title: 'Listeyi sil', onclick: () => {
-                if (confirm(`“${list.name}” ve içindeki ${list.cards.length} kart silinsin mi?`)) mutate('DELETE', `/lists/${list.id}`);
+                if (confirm(`“${list.name}” silinsin mi? İçindeki ${list.cards.length} kart arşive taşınır.`)) mutate('DELETE', `/lists/${list.id}`);
             } }, '✕')),
         h('div', { class: 'cards', 'data-id': list.id, 'data-scroll': `list-${list.id}` }, list.cards.map(renderCard)),
         !list.is_date && addForm(`card-${list.id}`, 'Kart ekle', '+', (title) => mutate('POST', `/lists/${list.id}/cards`, { title })));
@@ -259,6 +291,7 @@ function renderCardDialog() {
         return;
     }
     const list = state.lists.find((l) => l.id === card.list_id);
+    const readOnly = list.is_date && !isAdmin();
     // Alan kaydında pencere yeniden çizilmez; böylece o anda basılan buton kaybolmaz.
     const save = (field) => (e) => {
         if (field === 'title' && !e.target.value.trim()) {
@@ -271,38 +304,39 @@ function renderCardDialog() {
     cardDialog.replaceChildren(
         h('div', { class: 'dialog-head' },
             completeBox(card),
-            h('input', { value: card.title, maxlength: 255, 'aria-label': 'Başlık', onchange: save('title') }),
+            h('input', { value: card.title, disabled: readOnly, maxlength: 255, 'aria-label': 'Başlık', onchange: save('title') }),
             h('button', { class: 'icon', 'aria-label': 'Kapat', onclick: () => cardDialog.close() }, '✕')),
-        h('div', { class: 'muted' }, `Liste: ${list.name}`),
+        h('div', { class: 'muted' }, readOnly ? `Liste: ${list.name} · Onaylandı, sadece yönetici düzenleyebilir` : `Liste: ${list.name}`),
 
         h('div', { class: 'card-columns' },
             h('div', { class: 'card-main', 'data-scroll': 'card-main' },
                 h('h3', {}, 'Üyeler'),
                 h('div', { class: 'row' }, state.users.map((u) => h('button', {
-                    class: 'member-toggle', 'aria-pressed': String(card.members.includes(u.id)),
+                    class: 'member-toggle', disabled: readOnly, 'aria-pressed': String(card.members.includes(u.id)),
                     onclick: () => mutate('POST', `/cards/${card.id}/members/${u.id}`),
                 }, avatar(u), u.name))),
 
                 h('h3', {}, 'Bitiş tarihi'),
-                h('input', { type: 'date', value: card.due_date ?? '', 'aria-label': 'Bitiş tarihi', style: 'width:auto', onchange: save('due_date') }),
+                h('input', { type: 'date', disabled: readOnly, value: card.due_date ?? '', 'aria-label': 'Bitiş tarihi', style: 'width:auto', onchange: save('due_date') }),
 
                 h('h3', {}, 'Açıklama'),
-                h('textarea', { value: card.description ?? '', maxlength: 10000, 'aria-label': 'Açıklama', onchange: save('description') }),
+                h('textarea', { disabled: readOnly, value: card.description ?? '', maxlength: 10000, 'aria-label': 'Açıklama', onchange: save('description') }),
 
-                card.checklists.map(renderChecklist),
-                h('h3', {}, 'Yeni kontrol listesi'),
-                addForm('new-checklist', 'Kontrol listesi adı', 'Ekle', (name) => mutate('POST', `/cards/${card.id}/checklists`, { name })),
+                card.checklists.map((c) => renderChecklist(c, readOnly)),
+                !readOnly && h('h3', {}, 'Yeni kontrol listesi'),
+                !readOnly && addForm('new-checklist', 'Kontrol listesi adı', 'Ekle', (name) => mutate('POST', `/cards/${card.id}/checklists`, { name })),
 
                 list.is_date && isAdmin() && h('div', { style: 'margin-top:20px' }, h('button', { onclick: () => {
                     const target = state.lists.find((l) => l.name === 'Tamamlandı');
                     mutate('POST', `/cards/${card.id}/move`, { list_id: target.id, index: 0 });
                 } }, '↩ Tamamlandı listesine geri al')),
                 !isLocked(list) && h('div', { style: 'margin-top:20px' }, h('button', { class: 'danger', onclick: () => {
-                    if (confirm('Kart silinsin mi?')) mutate('DELETE', `/cards/${card.id}`);
-                } }, 'Kartı sil'))),
+                    mutate('DELETE', `/cards/${card.id}`);
+                } }, 'Arşivle'))),
 
             h('aside', { class: 'card-comments', 'data-scroll': 'card-comments' },
-                h('h3', {}, 'Yorumlar'),
+                h('div', { class: 'checklist-head' }, h('h3', {}, 'Yorumlar'),
+                h('button', { class: 'icon', onclick: () => openHistory(`/cards/${card.id}/history`, card.title) }, '🕘 Geçmiş')),
                 addForm(`comment-${card.id}`, 'Yorum yaz', 'Gönder', (body) => mutate('POST', `/cards/${card.id}/comments`, { body })),
                 card.comments.map((c) => {
                     const author = user(c.user_id) ?? { name: '⚡ Otomasyon', color: '#5b6b75' };
@@ -311,22 +345,22 @@ function renderCardDialog() {
                 }))));
 }
 
-function renderChecklist(checklist) {
+function renderChecklist(checklist, readOnly) {
     const done = checklist.items.filter((i) => i.checked).length;
     const percent = checklist.items.length ? (done / checklist.items.length) * 100 : 0;
     return h('div', {},
         h('div', { class: 'checklist-head' },
             h('h3', {}, `${checklist.name} (${done}/${checklist.items.length})`),
-            h('button', { class: 'icon', title: 'Kontrol listesini sil', onclick: () => {
+            !readOnly && h('button', { class: 'icon', title: 'Kontrol listesini sil', onclick: () => {
                 if (confirm(`“${checklist.name}” silinsin mi?`)) mutate('DELETE', `/checklists/${checklist.id}`);
             } }, '✕')),
         h('div', { class: 'bar' }, h('i', { style: `width:${percent}%` })),
         checklist.items.map((item) => h('div', { class: item.checked ? 'item checked' : 'item' },
-            h('input', { type: 'checkbox', checked: item.checked, 'aria-label': item.name,
+            h('input', { type: 'checkbox', checked: item.checked, disabled: readOnly, 'aria-label': item.name,
                 onchange: (e) => mutate('PUT', `/items/${item.id}`, { checked: e.target.checked }) }),
             h('span', {}, item.name),
-            h('button', { class: 'icon', title: 'Maddeyi sil', onclick: () => mutate('DELETE', `/items/${item.id}`) }, '✕'))),
-        addForm(`item-${checklist.id}`, 'Madde ekle', 'Ekle', (name) => mutate('POST', `/checklists/${checklist.id}/items`, { name })));
+            !readOnly && h('button', { class: 'icon', title: 'Maddeyi sil', onclick: () => mutate('DELETE', `/items/${item.id}`) }, '✕'))),
+        !readOnly && addForm(`item-${checklist.id}`, 'Madde ekle', 'Ekle', (name) => mutate('POST', `/checklists/${checklist.id}/items`, { name })));
 }
 
 // --- Otomasyon penceresi ---
@@ -357,6 +391,7 @@ function renderRules() {
 // --- Başlangıç ---
 
 $('#automations-button').onclick = () => { renderRules(); rulesDialog.showModal(); };
+$('#history-button').onclick = () => openHistory('/history');
 $('#user-select').onchange = async (e) => {
     try {
         await request('POST', `/switch-user/${e.target.value}`);
@@ -365,7 +400,7 @@ $('#user-select').onchange = async (e) => {
         toast(error.message);
     }
 };
-for (const dialog of [cardDialog, rulesDialog]) {
+for (const dialog of [cardDialog, rulesDialog, historyDialog]) {
     dialog.addEventListener('mousedown', (e) => {
         if (e.target !== dialog) return;
         const box = dialog.getBoundingClientRect();
